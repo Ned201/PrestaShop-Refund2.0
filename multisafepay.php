@@ -41,6 +41,7 @@ if (!defined('_PS_VERSION_')) {
 
 class Multisafepay extends PaymentModule
 {
+
     protected $_postErrors = array();
     public $details;
     public $owner;
@@ -169,12 +170,6 @@ class Multisafepay extends PaymentModule
                 $this->giftcards[] = $temp_array;
             }
         }
-
-        $this->msp = new MspClient();
-        $this->msp->initialize(
-            Configuration::get('MULTISAFEPAY_ENVIRONMENT'),
-            Configuration::get('MULTISAFEPAY_API_KEY')
-        );
     }
 
     public function install()
@@ -446,7 +441,7 @@ class Multisafepay extends PaymentModule
 
         if (Tools::isSubmit('btnSubmit') &&
             ( Configuration::get('MULTISAFEPAY_ENVIRONMENT') != Tools::getValue('MULTISAFEPAY_ENVIRONMENT') ||
-              Configuration::get('MULTISAFEPAY_API_KEY')     != Tools::getValue('MULTISAFEPAY_API_KEY') ) ) {
+                Configuration::get('MULTISAFEPAY_API_KEY')     != Tools::getValue('MULTISAFEPAY_API_KEY') ) ) {
             $postMessages['errors'] = $this->checkApiKey();
             return $postMessages;
         }
@@ -713,13 +708,13 @@ class Multisafepay extends PaymentModule
                         'name' =>  'MULTISAFEPAY_TIME_UNIT',
                         'required' =>  true,
                         'options'  =>  array(
-                                          'query' => array(   array ( 'id'   => 'days',   'name' => $this->l('Days')),
-                                                              array ( 'id'   => 'hours',  'name' => $this->l('Hours')),
-                                                              array ( 'id'   => 'seconds','name' => $this->l('Seconds'))
-                                                    ),
-                                            'id'    => 'id',
-                                            'name'  => 'name'
-                                            )
+                            'query' => array(   array ( 'id'   => 'days',   'name' => $this->l('Days')),
+                                array ( 'id'   => 'hours',  'name' => $this->l('Hours')),
+                                array ( 'id'   => 'seconds','name' => $this->l('Seconds'))
+                            ),
+                            'id'    => 'id',
+                            'name'  => 'name'
+                        )
                     ),
                     array(
                         'type' => 'hidden',
@@ -932,8 +927,8 @@ class Multisafepay extends PaymentModule
                 if ($activeGroup === true &&
                     Configuration::get('MULTISAFEPAY_GATEWAY_' . $gateway["code"] . '_CURRENCY_' . $id_currency) == 'on' &&
                     Configuration::get('MULTISAFEPAY_GATEWAY_' . $gateway["code"] . '_COUNTRY_'  . $id_country) == 'on' &&
-                   (Configuration::get('MULTISAFEPAY_GATEWAY_' . $gateway["code"] . '_CARRIER_'  . $carrierIdReference) == 'on' || $isVirtualCart)
-                    ) {
+                    (Configuration::get('MULTISAFEPAY_GATEWAY_' . $gateway["code"] . '_CARRIER_'  . $carrierIdReference) == 'on' || $isVirtualCart)
+                ) {
                     $active = true;
                 }
 
@@ -1039,7 +1034,7 @@ class Multisafepay extends PaymentModule
                     Configuration::get('MULTISAFEPAY_GIFTCARD_' . $gateway["code"] . '_CURRENCY_' . $id_currency) == 'on' &&
                     Configuration::get('MULTISAFEPAY_GIFTCARD_' . $gateway["code"] . '_COUNTRY_'  . $id_country) == 'on' &&
                     (Configuration::get('MULTISAFEPAY_GIFTCARD_' . $gateway["code"] . '_CARRIER_'  . $carrierIdReference) == 'on' || $isVirtualCart)
-                    ) {
+                ) {
                     $active = true;
                 }
 
@@ -1325,180 +1320,132 @@ class Multisafepay extends PaymentModule
         return $gateways;
     }
 
+    /**
+     * @param array $params
+     * @return bool
+     */
     public function hookActionOrderSlipAdd($params = [])
     {
-        $order = $params['order'];
-dump ($params);
-dump ($_REQUEST);
-//exit;
-
-        if ($order->module !== 'multisafepay') {
+        if ($params['order']->module !== 'multisafepay') {
             return false;
         }
 
-        $refundData = $this->getRefundData($order, $params);
+        dump($params);
+        $toRefund = $this->whatToRefund($params);
+        dump($toRefund);
+        exit;
 
-        $refund['description'] = 'Refund for order ' . $order->id_cart;
 
-        $gateway = 'PAD';
-        switch ($gateway){
-            case 'PAD':
-                $refund = $this->getRefundWithShoppingCart($order, $refundData);
+        $multiSafepay = new MspClient();
+        $environment = Configuration::get('MULTISAFEPAY_ENVIRONMENT');
+        $multiSafepay->initialize($environment, Configuration::get('MULTISAFEPAY_API_KEY'));
+        $transaction = $multiSafepay->orders->get('orders', $params['order']->id_cart);
+
+        switch ($transaction->payment_details->type){
+            case 'KLANA':
+            case 'PAYAFTER':
+            case 'EINVOICE':
+            case 'AFTERPAY':
+                $refundData = $this->getRefundFromShoppingCart($order, $toRefund);
                 break;
             default:
-                $refund = $this->getRefundSimple($order, $refundData);
+                $refundData = $this->getRefundAmount($order, $toRefund);
                 break;
         }
 
+        $refundData['description'] = 'Refund for order ' . $order->id_cart;
+        dump($refundData);
+        exit;
 
-        $this->msp->orders->post($refund, 'orders/' . $order->id_cart . '/refunds');
-        $result = $this->msp->orders->getResult();
+        $multiSafepay->orders->post($refundData, 'orders/'.$order->id_cart.'/refunds');
+        $result = $multiSafepay->orders->getResult();
+
         if (!$result->success) {
-            throw new Exception($result->error_code . ' : ' . $result->error_info);
+            throw new Exception($result->error_code .' : ' . $result->error_info);
         }
     }
 
 
+    /**
+     * @param $params
+     * @return mixed
+     */
+    private function whatToRefund($params){
+        $productList = $params['productList'];
+        $qtyList = $params['qtyList'];
+        $order = $params['order'];
 
-    private function getRefundData(Order $order, $params)
-    {
-        foreach ($params['productList'] as $product_id_order_detail => $details){
-
-            if ($product_id_order_detail === $details){
-                // Whole product has to be refunded,
-                // Get product price incl tax
-                $product = $order->getProducts()[$product_id_order_detail];
-dump ($product);
-                $price_pp = $product [''];
-
-
-            }
-        }
-
-/*            case 'cancelQuantity':
-                $refund['items'] = $this->getRefundProduct(
-                    $order,
-                    Tools::getValue('cancelQuantity'),
-                    []
-                );
-                $refund['discount'] = Tools::getValue('refund_total_voucher_off') === '1' ? $order->total_discounts_tax_incl : null;
-                $refund['custom']   = Tools::getValue('refund_total_voucher_off') === '2' ? Tools::getValue('refund_total_voucher_choose') : null;
-                $refund['shipping'] = Tools::getValue('shippingBack') === 'on' ? $order->total_shipping_tax_incl : null;
-                break;
-            case 'partialRefundProductQuantity':
-                $refund['items'] = $this->getRefundProduct(
-                    $order,
-                    Tools::getValue('partialRefundProductQuantity'),
-                    Tools::getValue('partialRefundProduct')
-                );
-                $refund['discount'] = Tools::getValue('refund_voucher_off') === '1' ? $order->total_discounts_tax_incl : null;
-                $refund['custom']   = Tools::getValue('refund_voucher_off') === '2' ? Tools::getValue('refund_voucher_choose') : null;
-                $refund['shipping'] = Tools::getValue('partialRefundShippingCost');
-                break;
-            case 'partialRefundProduct':
-                $refund['items'] = $this->getPartialRefundProduct(Tools::getValue('partialRefundProduct'));
-                $refund['discount'] = Tools::getValue('refund_voucher_off') === '1' ? $order->total_discounts_tax_incl : null;
-                $refund['custom']   = Tools::getValue('refund_voucher_off') === '2' ? Tools::getValue('refund_voucher_choose') : null;
-                $refund['shipping'] = Tools::getValue('partialRefundShippingCost');
-                break;
-        }*/
-
-        return $refund;
-    }
-
-
-
-
-
-
-    private function __OLD__getRefundData(Order $order)
-    {
-        switch ($this->getRefundMethod()) {
-            case 'cancelQuantity':
-                $refund['items'] = $this->getRefundProduct(
-                    $order,
-                    Tools::getValue('cancelQuantity'),
-                    []
-                );
-                $refund['discount'] = Tools::getValue('refund_total_voucher_off') === '1' ? $order->total_discounts_tax_incl : null;
-                $refund['custom']   = Tools::getValue('refund_total_voucher_off') === '2' ? Tools::getValue('refund_total_voucher_choose') : null;
-                $refund['shipping'] = Tools::getValue('shippingBack') === 'on' ? $order->total_shipping_tax_incl : null;
-                break;
-            case 'partialRefundProductQuantity':
-                $refund['items'] = $this->getRefundProduct(
-                    $order,
-                    Tools::getValue('partialRefundProductQuantity'),
-                    Tools::getValue('partialRefundProduct')
-                );
-                $refund['discount'] = Tools::getValue('refund_voucher_off') === '1' ? $order->total_discounts_tax_incl : null;
-                $refund['custom']   = Tools::getValue('refund_voucher_off') === '2' ? Tools::getValue('refund_voucher_choose') : null;
-                $refund['shipping'] = Tools::getValue('partialRefundShippingCost');
-                break;
-            case 'partialRefundProduct':
-                $refund['items'] = $this->getPartialRefundProduct(Tools::getValue('partialRefundProduct'));
-                $refund['discount'] = Tools::getValue('refund_voucher_off') === '1' ? $order->total_discounts_tax_incl : null;
-                $refund['custom']   = Tools::getValue('refund_voucher_off') === '2' ? Tools::getValue('refund_voucher_choose') : null;
-                $refund['shipping'] = Tools::getValue('partialRefundShippingCost');
-                break;
-        }
-
-        return $refund;
-    }
-
-    private function getRefundProduct(Order $order, $qtyList, $priceList)
-    {
-        $refundProducts = [];
-
-        foreach ($qtyList as $productId => $qty) {
-            if ($qty) {
-                $refundProducts[] = [
-                    'id' => $productId,
-                    'qty' => $qty,
-                    'product_price_wt' => $priceList[$productId]
+        // List of products to be refund
+        foreach ($productList as $product_id => $product) {
+            if ($product_id === $product){
+                $refundList['product'][$product_id] = [
+                    'qty'=> $qtyList[$product_id],
+                    'price'=> $this->getProductPrice($order, $product_id),
+                    'unit_price'=> $this->getProductPrice($order, $product_id)
                 ];
+            }else{
+                $refundList['product'][$product_id] = $product;
             }
         }
-        return $refundProducts;
+
+        // Any discount to refund
+        $refundList['discount'] = $this->getRefundDiscount($order);
+
+        // And what about the shipping cost?
+        $refundList['shipping'] = $this->getRefundShippingCost($order);
+
+        return $refundList;
     }
 
-    private function getPartialRefundProduct($qtyList)
+    /**
+     * @param Order $order
+     * @param $product_id
+     * @return mixed
+     */
+    private function getProductPrice(Order $order, $product_id)
     {
-        $refundItems = [];
-        foreach ($qtyList as $productId => $amount) {
-            $refundItems[] = [
-                'id' => $productId,
-                'qty' => 0,
-                'product_price_wt' => $amount
-            ];
-        }
-        return $refundItems;
+        $product = $order->getProducts()[$product_id];
+        return (float)str_replace(',', '.', $product['unit_price_tax_incl']);
     }
 
 
-    private function getRefundSimple(Order $order, $refund)
+    /**
+     * @param Order $order
+     * @return float
+     */
+    private function getRefundShippingCost(Order $order)
     {
-        $amount = 0;
-        foreach ($refund['items'] as $item) {
-            $amount += $item['price'] * $item['qty'];
+        $amount = Tools::getValue('partialRefundShippingCost');
+        if (Tools::getValue('shippingBack') === 'on') {
+            $amount = $order->total_shipping_tax_incl;
         }
-
-        $amount += $refund['shipping'];
-
-        // Standard refund
-        // If a discount is selected, reduce amount with the discount
-        $amount -= Tools::getValue('refund_total_voucher_off') === '1' ? $order->total_discounts_tax_incl : 0;
-
-        // A custom amount prevails over the existing amount
-        $amount = Tools::getValue('refund_total_voucher_off') === '2' ? Tools::getValue('refund_total_voucher_choose') : $amount;
-
-        $currency = new Currency($order->id_currency);
-        $refundData['currency'] = $currency->iso_code;
-        $refundData['amount'] = (int)($amount * 100);
-        return $refundData;
+        return (float)str_replace(',', '.', $amount);
     }
 
 
-    public function getRefundWithShoppingCart(Order $order, $refund)
+    /**
+     * @param Order $order
+     * @return float|null
+     */
+    private function getRefundDiscount(Order $order)
+    {
+        $amount = null;
+        if (Tools::getValue('refund_total_voucher_off') === '1' || Tools::getValue('refund_voucher_off') === '1') {
+            $amount = $order->total_discounts_tax_incl;
+        }
+        return (float)str_replace(',', '.', $amount);
+    }
+
+
+    private function getRefundAmount($productList)
+    {
+        $refund_amount = 0;
+        foreach ($productList as $product_id => $product) {
+            $refund_amount += $product['unit_price'] * $product['qty'];
+        }
+        return $refund_amount;
+    }
+    public function getRefundFromShoppingCart(Order $order, $productList = [])
     {
         $multisafepay = new MspClient();
         $environment = Configuration::get('MULTISAFEPAY_ENVIRONMENT');
@@ -1508,30 +1455,20 @@ dump ($product);
         $originalCart = $multisafepayOrder->shopping_cart;
         $refundData = [];
 
-dump ($originalCart);
-dump ($refund);
-//exit;
-
         foreach ($originalCart->items as $item) {
             // Add original invoiced items
             $refundData['checkout_data']['items'][] = $item;
 
             // Add current items being refunded
-            foreach ($refund['items'] as $next => $itemData) {
+            foreach ($productList as $productId => $productData) {
+                $product = $order->getProducts()[$productId];
+                $merchant_item_id = "{$product['id_product']}-{$product['product_attribute_id']}";
 
-                if ($itemData['product_price_wt'])
-
-//                $product = $order->getProducts()[$todo['id']];
-//dump ($product);
-
-//                $merchant_item_id = "{$product['id_product']}-{$product['product_attribute_id']}";
-
-//                if ($item->merchant_item_id === $merchant_item_id) {
-//                    $amount = $this->calculateAmountWithoutTax($productData['unit_price'], $product['tax_rate']);
-                    $refundData['checkout_data']['items'][] = $this->getRefundOrderLine($item, $itemData['quantity'], $amount);
-//                }
+                if ($item->merchant_item_id === $merchant_item_id) {
+                    $amount = $this->calculateAmountWithoutTax($productData['unit_price'], $product['tax_rate']);
+                    $refundData['checkout_data']['items'][] = $this->getRefundOrderLine($item, $productData['quantity'], $amount);
+                }
             }
-
 
             // Add shipping costs
             if ($item->merchant_item_id === 'msp-shipping' && $this->getRefundShippingAmount() > 0) {
@@ -1546,14 +1483,6 @@ dump ($refund);
 
         return $refundData;
     }
-
-
-    /**
-     * @param stdClass $item
-     * @param int $quantity
-     * @param float $amount
-     * @return stdclass
-     */
     private function getRefundOrderLine($item, $quantity, $amount = 0.0)
     {
         $refundItem = new \stdclass();
@@ -1566,16 +1495,13 @@ dump ($refund);
 
         return $refundItem;
     }
-
-    /**
-     * @param float $amount
-     * @param int $taxRate
-     * @return float
-     */
     private function calculateAmountWithoutTax($amount, $taxRate = 21)
     {
         return $amount / ($taxRate / 100 + 1);
     }
+
+
+
 
 
     /**
@@ -1603,25 +1529,4 @@ dump ($refund);
         return $invoiceBankDetails;
     }
 
-    /**
-     * Get the name of the refund method
-     *
-     * @return string|null
-     */
-    public function getRefundMethod()
-    {
-        if (array_sum(Tools::getValue('cancelQuantity'))) {
-            return 'cancelQuantity';
-        }
-
-        if (array_sum(Tools::getValue('partialRefundProductQuantity'))) {
-            return 'partialRefundProductQuantity';
-        }
-
-        if (array_sum(Tools::getValue('partialRefundProduct'))) {
-            return 'partialRefundProduct';
-        }
-
-        return null;
-    }
 }
