@@ -41,12 +41,6 @@ if (!defined('_PS_VERSION_')) {
 
 class Multisafepay extends PaymentModule
 {
-
-    protected $_postErrors = array();
-    public $details;
-    public $owner;
-    public $address;
-    public $extra_mail_vars;
     public $countries;
     public $currencies;
     public $carriers;
@@ -1332,10 +1326,10 @@ class Multisafepay extends PaymentModule
 
         $toRefund = $this->whatToRefund($params);
 
-        $multiSafepay = new MspClient();
+        $msp = new MspClient();
         $environment = Configuration::get('MULTISAFEPAY_ENVIRONMENT');
-        $multiSafepay->initialize($environment, Configuration::get('MULTISAFEPAY_API_KEY'));
-        $transaction = $multiSafepay->orders->get('orders', $params['order']->id_cart);
+        $msp->initialize($environment, Configuration::get('MULTISAFEPAY_API_KEY'));
+        $transaction = $msp->orders->get('orders', $params['order']->id_cart);
 
         switch ($transaction->payment_details->type){
             case 'KLARNA':
@@ -1351,8 +1345,8 @@ class Multisafepay extends PaymentModule
 
         $refundData['description'] = 'Refund for order ' . $params['order']->id_cart;
 
-        $multiSafepay->orders->post($refundData, 'orders/'.$params['order']->id_cart.'/refunds');
-        $result = $multiSafepay->orders->getResult();
+        $msp->orders->post($refundData, 'orders/'.$params['order']->id_cart.'/refunds');
+        $result = $msp->orders->getResult();
 
         if (!$result->success) {
             throw new Exception($result->error_code .' : ' . $result->error_info);
