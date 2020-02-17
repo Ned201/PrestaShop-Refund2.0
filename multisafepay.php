@@ -1342,16 +1342,16 @@ class Multisafepay extends PaymentModule
             case 'PAYAFTER':
             case 'EINVOICE':
             case 'AFTERPAY':
-                $refundData = $this->getRefundFromShoppingCart($order, $toRefund);
+                $refundData = $this->getRefundFromShoppingCart($params['order'], $toRefund);
                 break;
             default:
-                $refundData = $this->getRefundAmount($order, $toRefund);
+                $refundData = $this->getRefundAmount($toRefund);
                 break;
         }
 
-        $refundData['description'] = 'Refund for order ' . $order->id_cart;
+        $refundData['description'] = 'Refund for order ' . $params['order']->id_cart;
 
-        $multiSafepay->orders->post($refundData, 'orders/'.$order->id_cart.'/refunds');
+        $multiSafepay->orders->post($refundData, 'orders/'.$params['order']->id_cart.'/refunds');
         $result = $multiSafepay->orders->getResult();
 
         if (!$result->success) {
