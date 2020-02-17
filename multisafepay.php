@@ -1330,11 +1330,7 @@ class Multisafepay extends PaymentModule
             return false;
         }
 
-        dump($params);
         $toRefund = $this->whatToRefund($params);
-        dump($toRefund);
-        exit;
-
 
         $multiSafepay = new MspClient();
         $environment = Configuration::get('MULTISAFEPAY_ENVIRONMENT');
@@ -1342,7 +1338,7 @@ class Multisafepay extends PaymentModule
         $transaction = $multiSafepay->orders->get('orders', $params['order']->id_cart);
 
         switch ($transaction->payment_details->type){
-            case 'KLANA':
+            case 'KLARNA':
             case 'PAYAFTER':
             case 'EINVOICE':
             case 'AFTERPAY':
@@ -1354,8 +1350,6 @@ class Multisafepay extends PaymentModule
         }
 
         $refundData['description'] = 'Refund for order ' . $order->id_cart;
-        dump($refundData);
-        exit;
 
         $multiSafepay->orders->post($refundData, 'orders/'.$order->id_cart.'/refunds');
         $result = $multiSafepay->orders->getResult();
@@ -1499,9 +1493,6 @@ class Multisafepay extends PaymentModule
     {
         return $amount / ($taxRate / 100 + 1);
     }
-
-
-
 
 
     /**
